@@ -31,6 +31,11 @@
 ;;; For more information
 ;; CDMI Specification: http://cdmi.snia.org
 
+;;; Acknowledgements
+;; cdmi-send-request based on code from fluidinfo.el
+;; Copyright (C) 2009, 2010 Holger Durer
+;; https://github.com/hdurer/fluiddb.el/blob/master/fluidinfo.el
+
 ;;; Code:
 
 (require 'easymenu)
@@ -43,14 +48,47 @@
 ;;; Customizable Variables
 
 (defgroup cdmi nil
-  "A CDMI major mode."
+  "Interacting with CDMI in Emacs."
+  :prefix "cdmi-"
   :group 'tools)
+
+(defcustom cdmi-beautify-command "python -mjson.tool"
+  "The command to run for beautification of json values."
+  :group 'cdmi
+  :type 'string)
+
+(defcustom cdmi-spec-version "1.0.1"
+  "The CDMI client specification version to use."
+  :group 'cdmi
+  :type 'string)
+
+(defcustom cdmi-server nil
+  "The CDMI server to interact with."
+  :group 'cdmi
+  :type 'string)
+
+(defcustom cdmi-prefix "cdmi/"
+  "Prefix to use when accessing CDMI. Include trailing slash."
+  :group 'cdmi
+  :type 'string)
+
+(defcustom cdmi-secure t
+  "Connect to server securely (HTTPS)."
+  :group 'cdmi
+  :type 'boolean)
 
 ;; Allow others to hook in their own code
 (defcustom cdmi-mode-hook nil
   "Hook called by `cdmi-mode'."
   :type 'hook
   :group 'cdmi)
+
+(defvar cdmi-buffer-name "CDMI")
+
+(defvar cdmi-current-resource nil
+  "The path to the current resource.")
+(make-variable-buffer-local 'cdmi-current-resource)
+(put 'cdmi-current-resource 'permanent-local t)
 
 ;; Define the keymap
 (defvar cdmi-mode-map
@@ -78,6 +116,103 @@
   '("CDMI"
     ["Version" cdmi-version]
     ))
+
+;;; Utilities
+
+(defun cdmi-beautify ()
+  "Beautify javascript"
+  (interactive)
+  (shell-command-on-region (point-min)
+                           (point-max)
+                           cdmi-beautify-command nil t))
+
+;;; Communications
+(defun cdmi-send-request (method url-extra query-args body accept-value extra-headers)
+  "General purpose helper function to do the actual CDMI call."
+  (let ((extra-headers extra-headers))
+    (save-excursion
+      (when query-args
+        (loop
+         for first = t then nil
+         for (param . value) in query-args
+         do (setq url-extra
+                  (concat url-extra
+                          (if first "?" "&")
+                          param
+                          "="
+                          value))))
+      (let* ((*cdmi-within-call* t)
+             (url-request-method method)
+             (url-http-attempt-keepalives nil)
+             (url-mime-accept-string accept-value)
+             (url-mime-charset-string nil)
+             (url-extensions-header nil)
+             (url-request-data body)
+             (url-request-extra-headers (cons
+                                         (cons "X-CDMI-Specification-Version" cdmi-spec-version)
+                                         extra-headers))
+             (url (concat
+                   (if cdmi-secure "https" "http")
+                   "://" cdmi-server "/" cdmi-prefix url-extra))
+             (buffer (url-retrieve-synchronously url))
+             result)
+        (switch-to-buffer buffer)
+        (setq result (url-http-parse-headers))
+        (goto-char (if (re-search-forward "^\r?$" nil 1)
+                       (match-beginning 0)
+                     (point-max)))
+        (move-end-of-line nil)
+        (forward-char)
+        (let* ((status url-http-response-status)
+               (status-ok (and (<= 200 status)
+                               (<= status 299)))
+               (content-type url-http-content-type)
+               (content (buffer-substring (point) (point-max)))
+               (error-class (unless status-ok "ERROR")))
+          (kill-buffer buffer)
+          (if status-ok
+              (list status-ok content status content-type)
+            (list status-ok content status content-type error-class)))))))
+
+(defun cdmi-get (path ct)
+  "Retrieve the content of a CDMI path."
+  (cdmi-send-request "GET"
+                     path
+                     nil
+                     nil
+                     ct
+                     nil))
+
+(defun cdmi-get-container (path)
+  "Retrieve the content of a CDMI container."
+  (cdmi-open path "application/cdmi-container"))
+
+(defun cdmi-get-object (path)
+  "Retrieve the content of a CDMI object."
+  (cdmi-open path "application/cdmi-object"))
+
+(defun cdmi-get-domain (path)
+  "Retrieve the content of a CDMI domain."
+  (cdmi-open path "application/cdmi-domain"))
+
+(defun cdmi-clear-buffer ()
+  (interactive)
+  (switch-to-buffer
+   (get-buffer-create cdmi-buffer-name))
+  (goto-char (point-min))
+  (clipboard-kill-region 1 (point-max))
+  (beginning-of-buffer))
+
+(defun cdmi-open (path accept-value)
+  (interactive "Mpath: \nMaccept: ")
+  (switch-to-buffer
+   (get-buffer-create cdmi-buffer-name))
+  (cdmi-clear-buffer)
+  (insert (replace-regexp-in-string "\\*\\*\\*.*$" "" (cadr (cdmi-get path accept-value))))
+  (cdmi-beautify)
+  (cdmi-mode)
+  (set-buffer-modified-p nil)
+  path)
 
 ;; define classes of keywords
 (defvar cdmi-keywords
