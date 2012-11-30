@@ -85,6 +85,8 @@
 
 (defvar cdmi-buffer-name "CDMI")
 
+(defvar cdmi-resource-history nil)
+
 (defvar cdmi-current-resource nil
   "The path to the current resource.")
 (make-variable-buffer-local 'cdmi-current-resource)
@@ -167,7 +169,10 @@
                (status-ok (and (<= 200 status)
                                (<= status 299)))
                (content-type url-http-content-type)
-               (content (buffer-substring (point) (point-max)))
+               ;; hack to remove errors returned from transport
+               ;; still looking into why these are returned
+               ;; seems to only occur with secure connections
+               (content (replace-regexp-in-string "\\*\\*\\*.*$" "" (buffer-substring (point) (point-max))))
                (error-class (unless status-ok "ERROR")))
           (kill-buffer buffer)
           (if status-ok
@@ -183,19 +188,8 @@
                      ct
                      nil))
 
-(defun cdmi-get-container (path)
-  "Retrieve the content of a CDMI container."
-  (cdmi-open path "application/cdmi-container"))
-
-(defun cdmi-get-object (path)
-  "Retrieve the content of a CDMI object."
-  (cdmi-open path "application/cdmi-object"))
-
-(defun cdmi-get-domain (path)
-  "Retrieve the content of a CDMI domain."
-  (cdmi-open path "application/cdmi-domain"))
-
 (defun cdmi-clear-buffer ()
+  "Clear the contents of the CDMI buffer."
   (interactive)
   (switch-to-buffer
    (get-buffer-create cdmi-buffer-name))
@@ -203,16 +197,69 @@
   (clipboard-kill-region 1 (point-max))
   (beginning-of-buffer))
 
-(defun cdmi-open (path accept-value)
-  (interactive "Mpath: \nMaccept: ")
+(defun cdmi-open-in-buffer (path accept-value)
+  "Open content of a resource in the CDMI buffer."
   (switch-to-buffer
    (get-buffer-create cdmi-buffer-name))
   (cdmi-clear-buffer)
-  (insert (replace-regexp-in-string "\\*\\*\\*.*$" "" (cadr (cdmi-get path accept-value))))
+  (insert (cadr (cdmi-get path accept-value)))
   (cdmi-beautify)
   (cdmi-mode)
   (set-buffer-modified-p nil)
+  (setq cdmi-current-resource path)
   path)
+
+(defun cdmi-open-container (path)
+  "Open the content of a CDMI container."
+  (interactive
+   (list (read-string "path: "
+                      (if cdmi-current-resource cdmi-current-resource "")
+                      'cdmi-resource-history)))
+  (cdmi-open-in-buffer path "application/cdmi-container"))
+
+(defun cdmi-open-object (path)
+  "Open the content of a CDMI object."
+  (interactive
+   (list (read-string "path: "
+                      (if cdmi-current-resource cdmi-current-resource "")
+                      'cdmi-resource-history))) 
+  (cdmi-open-in-buffer path "application/cdmi-object"))
+
+(defun cdmi-open-domain (path)
+  "Open the content of a CDMI domain."
+  (interactive
+   (list (read-string "path: "
+                      (if cdmi-current-resource cdmi-current-resource "")
+                      'cdmi-resource-history)))
+  (cdmi-open-in-buffer path "application/cdmi-domain"))
+
+(defun cdmi-open-queue (path)
+  "Open the content of a CDMI queue."
+  (interactive
+   (list (read-string "path: "
+                      (if cdmi-current-resource cdmi-current-resource "")
+                      'cdmi-resource-history)))
+  (cdmi-open-in-buffer path "application/cdmi-queue"))
+
+(defun cdmi-open-capability (path)
+  "Open the content of a CDMI capability."
+  (interactive
+   (list (read-string "path: " (if cdmi-current-resource cdmi-current-resource "")
+                      'cdmi-resource-history)))
+  (cdmi-open-in-buffer path "application/cdmi-capability"))
+
+(defun cdmi-open (path accept-value)
+  "Open a CDMI resource specified by `path' in the CDMI buffer."
+  (interactive
+   (list
+    (read-string "path: "
+                 (if cdmi-current-resource cdmi-current-resource "")
+                 'cdmi-resource-history)
+         (read-string "accept: " "*/*" nil
+                      (list "*/*" "application/cdmi-object"
+                       "application/cdmi-container" "application/cdmi-domain"
+                       "application/cdmi-queue" "application/cdmi-capability"))))
+  (cdmi-open-in-buffer path accept-value))
 
 ;; define classes of keywords
 (defvar cdmi-keywords
